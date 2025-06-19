@@ -1,0 +1,301 @@
+import java.util.*;
+import java.util.concurrent.*;
+import java.sql.*;
+import java.time.LocalDateTime;
+
+interface VotingSystemAPI {
+    List<Voting> getAllVotings(boolean forceRefresh) throws SQLException;
+    Voting getVotingById(String votingId, boolean forceRefresh) throws SQLException;
+    List<Candidate> getCandidatesForVoting(String votingId, boolean forceRefresh) throws SQLException;
+    Map<String, Integer> getVotingResults(String votingId, boolean forceRefresh) throws SQLException;
+    boolean addVote(String votingId, String candidateId) throws SQLException;
+    boolean updateCandidateInfo(String candidateId, String name, String party, String bio) throws SQLException;
+    byte[] exportVotingResults(String votingId, String format) throws SQLException;
+}
+
+class VotingSystemAPIImpl implements VotingSystemAPI {
+    private final DatabaseConnector dbConnector;
+    private final Map<String, CachedData<?>> cache = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    
+    public VotingSystemAPIImpl(DatabaseConnector dbConnector) {
+        this.dbConnector = dbConnector;
+        
+        scheduler.scheduleAtFixedRate(this::clearExpiredCache, 30, 30, TimeUnit.MINUTES);
+    }
+    
+    @Override
+    public List<Voting> getAllVotings(boolean forceRefresh) throws SQLException {
+        String cacheKey = "all_votings";
+        
+        if (!forceRefresh) {
+            CachedData<?> cached = cache.get(cacheKey);
+            if (cached != null && !cached.isExpired()) {
+                @SuppressWarnings("unchecked")
+                List<Voting> result = (List<Voting>) cached.getData();
+                return new ArrayList<>(result);
+            }
+        }
+        
+        List<Voting> votings = dbConnector.getAllVotingsFromDB();
+        
+        if (dbConnector.isReadOnly("votings")) {
+            cache.put(cacheKey, new CachedData<>(votings, 30));
+        }
+        
+        return votings;
+    }
+    
+    @Override
+    public Voting getVotingById(String votingId, boolean forceRefresh) throws SQLException {
+        String cacheKey = "voting_" + votingId;
+        
+        if (!forceRefresh) {
+            CachedData<?> cached = cache.get(cacheKey);
+            if (cached != null && !cached.isExpired()) {
+                @SuppressWarnings("unchecked")
+                Voting result = (Voting) cached.getData();
+                return new Voting(result); 
+            }
+        }
+        
+        Voting voting = dbConnector.getVotingFromDB(votingId);
+        
+        if (voting != null && dbConnector.isReadOnly("votings")) {
+            cache.put(cacheKey, new CachedData<>(new Voting(voting), 30));
+        }
+        
+        return voting;
+    }
+    
+    @Override
+    public List<Candidate> getCandidatesForVoting(String votingId, boolean forceRefresh) throws SQLException {
+        String cacheKey = "candidates_" + votingId;
+        
+        if (!forceRefresh) {
+            CachedData<?> cached = cache.get(cacheKey);
+            if (cached != null && !cached.isExpired()) {
+                @SuppressWarnings("unchecked")
+                List<Candidate> result = (List<Candidate>) cached.getData();
+                return new ArrayList<>(result);
+            }
+        }
+        
+        List<Candidate> candidates = dbConnector.getCandidatesForVotingFromDB(votingId);
+        
+        if (dbConnector.isReadOnly("candidates")) {
+            cache.put(cacheKey, new CachedData<>(new ArrayList<>(candidates), 30);
+        }
+        
+        return candidates;
+    }
+    
+    @Override
+    public Map<String, Integer> getVotingResults(String votingId, boolean forceRefresh) throws SQLException {
+        String cacheKey = "results_" + votingId;
+        
+        if (!forceRefresh) {
+            CachedData<?> cached = cache.get(cacheKey);
+            if (cached != null && !cached.isExpired()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Integer> result = (Map<String, Integer>) cached.getData();
+                return new HashMap<>(result);
+            }
+        }
+        
+        Map<String, Integer> results = dbConnector.getVotingResultsFromDB(votingId);
+        
+        if (dbConnector.isReadOnly("voting_results")) {
+            cache.put(cacheKey, new CachedData<>(new HashMap<>(results), 30));
+        }
+        
+        return results;
+    }
+    
+    @Override
+    public boolean addVote(String votingId, String candidateId) throws SQLException {
+        boolean result = dbConnector.addVoteToDB(votingId, candidateId);
+        
+        cache.remove("results_" + votingId);
+        
+        return result;
+    }
+    
+    @Override
+    public boolean updateCandidateInfo(String candidateId, String name, String party, String bio) throws SQLException {
+        boolean result = dbConnector.updateCandidateInDB(candidateId, name, party, bio);
+        
+        cache.keySet().removeIf(key -> key.startsWith("candidates_"));
+        cache.keySet().removeIf(key -> key.startsWith("voting_"));
+        cache.remove("all_votings");
+        
+        return result;
+    }
+    
+    @Override
+    public byte[] exportVotingResults(String votingId, String format) throws SQLException {
+
+        return dbConnector.exportResultsFromDB(votingId, format);
+    }
+    
+    private void clearExpiredCache() {
+        cache.entrySet().removeIf(entry -> entry.getValue().isExpired());
+    }
+    
+    public void shutdown() {
+        scheduler.shutdown();
+        try {
+            if (!scheduler.awaitTermination(10, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            scheduler.shutdownNow();
+        }
+    }
+}
+
+class CachedData<T> {
+    private final T data;
+    private final LocalDateTime expirationTime;
+    
+    public CachedData(T data, int minutesToLive) {
+        this.data = data;
+        this.expirationTime = LocalDateTime.now().plusMinutes(minutesToLive);
+    }
+    
+    public T getData() {
+        return data;
+    }
+    
+    public boolean isExpired() {
+        return LocalDateTime.now().isAfter(expirationTime);
+    }
+}
+
+class Voting {
+    private String id;
+    private String title;
+    private Date endDate;
+    private boolean isActive;
+    
+    public Voting(String id, String title, Date endDate) {
+        this.id = id;
+        this.title = title;
+        this.endDate = endDate;
+        this.isActive = new Date().before(endDate);
+    }
+    
+    public Voting(Voting other) {
+        this.id = other.id;
+        this.title = other.title;
+        this.endDate = other.endDate;
+        this.isActive = other.isActive;
+    }
+    
+    public String getId() { return id; }
+    public String getTitle() { return title; }
+    public Date getEndDate() { return endDate; }
+    public boolean isActive() { return isActive; }
+}
+
+class Candidate {
+    private String id;
+    private String name;
+    private String party;
+    private String bio;
+    
+    public Candidate(String id, String name, String party, String bio) {
+        this.id = id;
+        this.name = name;
+        this.party = party;
+        this.bio = bio;
+    }
+    
+
+    public String getId() { return id; }
+    public String getName() { return name; }
+    public String getParty() { return party; }
+    public String getBio() { return bio; }
+}
+
+class DatabaseConnector {
+    public List<Voting> getAllVotingsFromDB() throws SQLException {
+
+        return Collections.emptyList();
+    }
+    
+    public Voting getVotingFromDB(String votingId) throws SQLException {
+
+        return null;
+    }
+    
+    public List<Candidate> getCandidatesForVotingFromDB(String votingId) throws SQLException {
+
+        return Collections.emptyList();
+    }
+    
+    public Map<String, Integer> getVotingResultsFromDB(String votingId) throws SQLException {
+
+        return Collections.emptyMap();
+    }
+    
+    public boolean addVoteToDB(String votingId, String candidateId) throws SQLException {
+
+        return false;
+    }
+    
+    public boolean updateCandidateInDB(String candidateId, String name, String party, String bio) throws SQLException {
+
+        return false;
+    }
+    
+    public byte[] exportResultsFromDB(String votingId, String format) throws SQLException {
+
+        return new byte[0];
+    }
+    
+    public boolean isReadOnly(String tableName) throws SQLException {
+
+        return tableName.equals("votings") || tableName.equals("candidates");
+    }
+}
+
+
+public class Main {
+    public static void main(String[] args) {
+        DatabaseConnector dbConnector = new DatabaseConnector();
+        VotingSystemAPI api = new VotingSystemAPIImpl(dbConnector);
+        
+        try {
+
+            List<Voting> votings = api.getAllVotings(false);
+            System.out.println("Все голосования: " + votings.size());
+            
+            if (!votings.isEmpty()) {
+                String votingId = votings.get(0).getId();
+                
+
+                List<Candidate> candidates = api.getCandidatesForVoting(votingId, false);
+                System.out.println("Кандидаты: " + candidates.size());
+                
+
+                if (!candidates.isEmpty()) {
+                    boolean voteResult = api.addVote(votingId, candidates.get(0).getId());
+                    System.out.println("Результат голосования: " + voteResult);
+                }
+
+                Map<String, Integer> results = api.getVotingResults(votingId, false);
+                System.out.println("Результаты: " + results);
+            }
+            
+
+            byte[] pdfReport = api.exportVotingResults(votingId, "PDF");
+            System.out.println("PDF размером: " + pdfReport.length + " байт");
+            
+        } catch (SQLException e) {
+            e.printStackTrace();
+        } finally {
+            ((VotingSystemAPIImpl) api).shutdown();
+        }
+    }
+}

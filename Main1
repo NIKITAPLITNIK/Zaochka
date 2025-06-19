@@ -1,0 +1,119 @@
+import java.util.Scanner;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
+
+public class MathCalculator {
+
+    public static void main(String[] args) {
+        CalculatorController controller = new CalculatorController();
+        controller.run();
+    }
+}
+
+class CalculatorModel {
+    private static final Pattern VALID_EXPRESSION_PATTERN = 
+        Pattern.compile("^[-+]?\\d+([+\\-*/^()\\s//.]*\\d+)*$");
+    private static final Pattern OPERATORS_PATTERN = 
+        Pattern.compile("[+\\-*/^//]");
+    
+    public double calculate(String expression) throws IllegalArgumentException {
+        if (!validateExpression(expression)) {
+            throw new IllegalArgumentException("Некорректное математическое выражение");
+        }
+        
+        String processedExpr = expression.replaceAll("\\^", "**")
+                                       .replaceAll("//", "/");
+        
+        try {
+            ScriptEngineManager manager = new ScriptEngineManager();
+            ScriptEngine engine = manager.getEngineByName("js");
+            Object result = engine.eval(processedExpr);
+            
+            if (result instanceof Integer) {
+                return ((Integer) result).doubleValue();
+            } else if (result instanceof Double) {
+                return (Double) result;
+            } else {
+                throw new IllegalArgumentException("Невозможно вычислить выражение");
+            }
+        } catch (ScriptException e) {
+            throw new IllegalArgumentException("Ошибка вычисления: " + e.getMessage());
+        }
+    }
+    
+    private boolean validateExpression(String expression) {
+        if (!VALID_EXPRESSION_PATTERN.matcher(expression).matches()) {
+            return false;
+        }
+        Matcher operatorMatcher = OPERATORS_PATTERN.matcher(expression);
+        int operatorCount = 0;
+        while (operatorMatcher.find()) {
+            operatorCount++;
+            if (operatorCount >= 100) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+}
+
+class CalculatorView {
+    private Scanner scanner;
+    
+    public CalculatorView() {
+        scanner = new Scanner(System.in);
+    }
+    
+    public String getInput() {
+        System.out.println("Введите математическое выражение (или 'exit' для выхода):");
+        return scanner.nextLine().trim();
+    }
+    
+    public void showResult(double result) {
+        System.out.printf("Результат: %.4f%n%n", result);
+    }
+    
+    public void showError(String message) {
+        System.out.printf("Ошибка: %s%n%n", message);
+    }
+    
+    public void close() {
+        scanner.close();
+    }
+}
+
+class CalculatorController {
+    private CalculatorModel model;
+    private CalculatorView view;
+    
+    public CalculatorController() {
+        model = new CalculatorModel();
+        view = new CalculatorView();
+    }
+    
+    public void run() {
+        System.out.println("Математический калькулятор");
+        System.out.println("Поддерживаемые операции: +, -, *, /, ^ (степень), // (целочисленное деление)");
+        
+        while (true) {
+            String expression = view.getInput();
+            
+            if (expression.equalsIgnoreCase("exit")) {
+                break;
+            }
+            
+            try {
+                double result = model.calculate(expression);
+                view.showResult(result);
+            } catch (IllegalArgumentException e) {
+                view.showError(e.getMessage());
+            }
+        }
+        
+        view.close();
+    }
+}

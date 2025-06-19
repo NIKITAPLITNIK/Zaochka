@@ -1,0 +1,824 @@
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.stream.Collectors;
+import com.itextpdf.text.*;
+import com.itextpdf.text.pdf.PdfWriter;
+
+class User {
+    private String username;
+    private String password;
+    private String role;
+    private String fullName;
+    private String birthDate;
+    private String snils;
+    private List<String> votedIn = new ArrayList<>();
+
+    public User(String username, String password, String role, String fullName, String birthDate, String snils) {
+        this.username = username;
+        this.password = password;
+        this.role = role;
+        this.fullName = fullName;
+        this.birthDate = birthDate;
+        this.snils = snils;
+    }
+
+    public String getUsername() { return username; }
+    public String getPassword() { return password; }
+    public String getRole() { return role; }
+    public String getFullName() { return fullName; }
+    public String getBirthDate() { return birthDate; }
+    public String getSnils() { return snils; }
+    public List<String> getVotedIn() { return votedIn; }
+    
+    public void addVotedIn(String votingId) {
+        votedIn.add(votingId);
+    }
+}
+
+class Candidate {
+    private String id;
+    private String name;
+    private String party;
+    private String bio;
+    private String username;
+
+    public Candidate(String id, String name, String party, String bio, String username) {
+        this.id = id;
+        this.name = name;
+        this.party = party;
+        this.bio = bio;
+        this.username = username;
+    }
+
+    public String getId() { return id; }
+    public String getName() { return name; }
+    public String getParty() { return party; }
+    public String getBio() { return bio; }
+    public String getUsername() { return username; }
+}
+
+class Voting {
+    private String id;
+    private String title;
+    private Date endDate;
+    private List<String> candidateIds = new ArrayList<>();
+    private Map<String, Integer> votes = new HashMap<>();
+    private boolean isActive;
+
+    public Voting(String id, String title, Date endDate) {
+        this.id = id;
+        this.title = title;
+        this.endDate = endDate;
+        this.isActive = new Date().before(endDate);
+    }
+
+    public String getId() { return id; }
+    public String getTitle() { return title; }
+    public Date getEndDate() { return endDate; }
+    public List<String> getCandidateIds() { return candidateIds; }
+    public Map<String, Integer> getVotes() { return votes; }
+    public boolean isActive() { return isActive; }
+    
+    public void addCandidate(String candidateId) {
+        candidateIds.add(candidateId);
+        votes.put(candidateId, 0);
+    }
+    
+    public void voteFor(String candidateId) {
+        votes.put(candidateId, votes.getOrDefault(candidateId, 0) + 1);
+    }
+    
+    public void checkStatus() {
+        isActive = new Date().before(endDate);
+    }
+}
+
+class VotingSystemModel {
+    private Map<String, User> users = new HashMap<>();
+    private Map<String, Candidate> candidates = new HashMap<>();
+    private Map<String, Voting> votings = new HashMap<>();
+    private User currentUser;
+    
+    public void initialize() {
+        users.put("admin", new User("admin", "admin123", "ADMIN", "Admin Adminovich", "01.01.1970", "000-000-000 00"));
+    }
+    
+    public boolean login(String username, String password) {
+        if (users.containsKey(username) {
+            User user = users.get(username);
+            if (user.getPassword().equals(password)) {
+                currentUser = user;
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    public void logout() {
+        currentUser = null;
+    }
+    
+    public User getCurrentUser() {
+        return currentUser;
+    }
+    
+    public List<User> getAllUsers() {
+        return new ArrayList<>(users.values());
+    }
+    
+    public boolean deleteUser(String username) {
+        if (users.containsKey(username) && !username.equals("admin")) {
+            users.remove(username);
+            return true;
+        }
+        return false;
+    }
+    
+    public List<User> getCikUsers() {
+        return users.values().stream()
+                .filter(u -> u.getRole().equals("CIK"))
+                .collect(Collectors.toList());
+    }
+    
+    public boolean deleteCikUser(String username) {
+        User user = users.get(username);
+        if (user != null && user.getRole().equals("CIK")) {
+            users.remove(username);
+            return true;
+        }
+        return false;
+    }
+    
+    public boolean createCikUser(String username, String password) {
+        if (!users.containsKey(username)) {
+            users.put(username, new User(username, password, "CIK", "CIK User", "01.01.1980", "111-111-111 11"));
+            return true;
+        }
+        return false;
+    }
+    
+    public List<Candidate> getAllCandidates() {
+        return new ArrayList<>(candidates.values());
+    }
+    
+    public boolean deleteCandidate(String candidateId) {
+        if (candidates.containsKey(candidateId)) {
+            candidates.remove(candidateId);
+            return true;
+        }
+        return false;
+    }
+    public boolean createVoting(String title, Date endDate) {
+        if (currentUser == null || !currentUser.getRole().equals("CIK")) return false;
+        
+        String id = UUID.randomUUID().toString();
+        votings.put(id, new Voting(id, title, endDate));
+        return true;
+    }
+    
+    public boolean addCandidateToVoting(String votingId, String candidateId) {
+        Voting voting = votings.get(votingId);
+        if (voting != null && candidates.containsKey(candidateId)) {
+            voting.addCandidate(candidateId);
+            return true;
+        }
+        return false;
+    }
+    
+    public boolean createCandidate(String name, String party, String bio, String username, String password) {
+        if (users.containsKey(username)) return false;
+        
+        String id = UUID.randomUUID().toString();
+        candidates.put(id, new Candidate(id, name, party, bio, username));
+        users.put(username, new User(username, password, "CANDIDATE", name, "01.01.1985", "222-222-222 22"));
+        return true;
+    }
+    
+    public byte[] generatePdfResults(String votingId) throws DocumentException {
+        Voting voting = votings.get(votingId);
+        if (voting == null) return null;
+        
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        Document document = new Document();
+        PdfWriter.getInstance(document, outputStream);
+        
+        document.open();
+        document.add(new Paragraph("Результаты голосования: " + voting.getTitle()));
+        document.add(new Paragraph("Дата окончания: " + voting.getEndDate()));
+        document.add(new Paragraph(" "));
+        
+        for (String candidateId : voting.getCandidateIds()) {
+            Candidate candidate = candidates.get(candidateId);
+            document.add(new Paragraph(candidate.getName() + " (" + candidate.getParty() + "): " + 
+                voting.getVotes().getOrDefault(candidateId, 0) + " голосов"));
+        }
+        
+        document.close();
+        return outputStream.toByteArray();
+    }
+    
+    public boolean updateCandidateInfo(String candidateId, String name, String party, String bio) {
+        if (currentUser == null || !currentUser.getRole().equals("CANDIDATE")) return false;
+        
+        Candidate candidate = candidates.values().stream()
+                .filter(c -> c.getUsername().equals(currentUser.getUsername()))
+                .findFirst()
+                .orElse(null);
+        
+        if (candidate != null) {
+            candidate = new Candidate(candidate.getId(), name, party, bio, candidate.getUsername());
+            candidates.put(candidate.getId(), candidate);
+            return true;
+        }
+        return false;
+    }
+    
+    public List<Voting> getCandidateVotings() {
+        if (currentUser == null || !currentUser.getRole().equals("CANDIDATE")) return Collections.emptyList();
+        
+        String username = currentUser.getUsername();
+        return votings.values().stream()
+                .filter(v -> v.getCandidateIds().stream()
+                        .anyMatch(cid -> candidates.get(cid).getUsername().equals(username)))
+                .collect(Collectors.toList());
+    }
+    
+    public boolean registerUser(String username, String password, String fullName, String birthDate, String snils) {
+        if (users.containsKey(username)) return false;
+        
+        users.put(username, new User(username, password, "USER", fullName, birthDate, snils));
+        return true;
+    }
+    
+    public boolean vote(String votingId, String candidateId) {
+        if (currentUser == null || !currentUser.getRole().equals("USER")) return false;
+        
+        Voting voting = votings.get(votingId);
+        if (voting != null && voting.isActive() && 
+            voting.getCandidateIds().contains(candidateId) &&
+            !currentUser.getVotedIn().contains(votingId)) {
+            
+            voting.voteFor(candidateId);
+            currentUser.addVotedIn(votingId);
+            return true;
+        }
+        return false;
+    }
+    
+    public List<Candidate> getCandidatesForVoting(String votingId) {
+        Voting voting = votings.get(votingId);
+        if (voting == null) return Collections.emptyList();
+        
+        return voting.getCandidateIds().stream()
+                .map(candidates::get)
+                .collect(Collectors.toList());
+    }
+    
+    public List<Voting> getAllVotings() {
+        return new ArrayList<>(votings.values());
+    }
+    
+    public String exportResults(Set<String> votingIds, boolean singleFile, String directory, String filename) {
+        try {
+            if (filename == null || filename.trim().isEmpty()) {
+                filename = "results_" + System.currentTimeMillis() + (singleFile ? ".txt" : "");
+            }
+            
+            Path dirPath = Paths.get(directory);
+            if (!Files.exists(dirPath)) {
+                Files.createDirectories(dirPath);
+            }
+            
+            if (singleFile) {
+                Path filePath = dirPath.resolve(filename.endsWith(".txt") ? filename : filename + ".txt");
+                try (BufferedWriter writer = Files.newBufferedWriter(filePath)) {
+                    for (String votingId : votingIds) {
+                        writeVotingResults(writer, votingId);
+                    }
+                }
+                return filePath.toString();
+            } else {
+                for (String votingId : votingIds) {
+                    String votingFilename = filename + "_" + votingId + ".txt";
+                    Path filePath = dirPath.resolve(votingFilename);
+                    try (BufferedWriter writer = Files.newBufferedWriter(filePath)) {
+                        writeVotingResults(writer, votingId);
+                    }
+                }
+                return dirPath.toString();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+    
+    private void writeVotingResults(BufferedWriter writer, String votingId) throws IOException {
+        Voting voting = votings.get(votingId);
+        if (voting == null) return;
+        
+        writer.write("Результаты голосования: " + voting.getTitle());
+        writer.newLine();
+        writer.write("Дата окончания: " + voting.getEndDate());
+        writer.newLine();
+        writer.write("Статус: " + (voting.isActive() ? "Активно" : "Завершено"));
+        writer.newLine();
+        writer.newLine();
+        
+        for (String candidateId : voting.getCandidateIds()) {
+            Candidate candidate = candidates.get(candidateId);
+            writer.write(candidate.getName() + " (" + candidate.getParty() + "): " + 
+                voting.getVotes().getOrDefault(candidateId, 0) + " голосов");
+            writer.newLine();
+        }
+        
+        writer.newLine();
+        writer.write("----------------------------------------");
+        writer.newLine();
+        writer.newLine();
+    }
+}
+
+class VotingSystemView {
+    private Scanner scanner = new Scanner(System.in);
+    
+    public void showWelcome() {
+        System.out.println("=== Система электронного голосования ===");
+    }
+    
+    public String[] getLoginCredentials() {
+        System.out.print("Логин: ");
+        String username = scanner.nextLine();
+        System.out.print("Пароль: ");
+        String password = scanner.nextLine();
+        return new String[]{username, password};
+    }
+    
+    public void showAdminMenu() {
+        System.out.println("\nМеню администратора:");
+        System.out.println("1. Просмотр списка пользователей");
+        System.out.println("2. Удаление пользователя");
+        System.out.println("3. Просмотр списка ЦИК");
+        System.out.println("4. Удаление ЦИК");
+        System.out.println("5. Создание ЦИК");
+        System.out.println("6. Просмотр списка кандидатов");
+        System.out.println("7. Удаление кандидата");
+        System.out.println("0. Выход");
+    }
+    
+    public void showCikMenu() {
+        System.out.println("\nМеню ЦИК:");
+        System.out.println("1. Создание голосования");
+        System.out.println("2. Добавление кандидатов");
+        System.out.println("3. Печать результатов (PDF)");
+        System.out.println("4. Выгрузка результатов");
+        System.out.println("0. Выход");
+    }
+    
+    public void showCandidateMenu() {
+        System.out.println("\nМеню кандидата:");
+        System.out.println("1. Заполнение данных о себе");
+        System.out.println("2. Результаты предыдущего голосования");
+        System.out.println("3. Все голосования, в которых участвовал");
+        System.out.println("0. Выход");
+    }
+    
+    public void showUserMenu() {
+        System.out.println("\nМеню пользователя:");
+        System.out.println("1. Просмотр активных голосований");
+        System.out.println("2. Голосование");
+        System.out.println("3. Просмотр списка кандидатов");
+        System.out.println("4. История голосований");
+        System.out.println("0. Выход");
+    }
+    
+    public void showRegistrationForm() {
+        System.out.println("\nФорма регистрации:");
+    }
+    
+    public String getInput(String prompt) {
+        System.out.print(prompt + ": ");
+        return scanner.nextLine();
+    }
+    
+    public void showMessage(String message) {
+        System.out.println(message);
+    }
+    
+    public void showError(String error) {
+        System.err.println("Ошибка: " + error);
+    }
+    
+    public void showUserList(List<User> users) {
+        System.out.println("\nСписок пользователей:");
+        users.forEach(u -> System.out.println(u.getUsername() + " (" + u.getRole() + ")"));
+    }
+    
+    public void showCandidateList(List<Candidate> candidates) {
+        System.out.println("\nСписок кандидатов:");
+        candidates.forEach(c -> System.out.println(c.getName() + " (" + c.getParty() + ")"));
+    }
+    
+    public void showVotingList(List<Voting> votings) {
+        System.out.println("\nСписок голосований:");
+        votings.forEach(v -> System.out.println(v.getTitle() + " (до " + v.getEndDate() + 
+            ") - " + (v.isActive() ? "Активно" : "Завершено")));
+    }
+    
+    public void showVotingResults(Voting voting, Map<String, Candidate> candidates) {
+        System.out.println("\nРезультаты голосования: " + voting.getTitle());
+        System.out.println("Дата окончания: " + voting.getEndDate());
+        System.out.println("Статус: " + (voting.isActive() ? "Активно" : "Завершено"));
+        System.out.println();
+        
+        voting.getCandidateIds().forEach(cid -> {
+            Candidate c = candidates.get(cid);
+            System.out.println(c.getName() + " (" + c.getParty() + "): " + 
+                voting.getVotes().getOrDefault(cid, 0) + " голосов");
+        });
+    }
+    
+    public boolean askYesNo(String question) {
+        System.out.print(question + " (y/n): ");
+        String answer = scanner.nextLine().toLowerCase();
+        return answer.equals("y") || answer.equals("yes");
+    }
+    
+    public String getExportDirectory() {
+        System.out.print("Введите путь для сохранения (оставьте пустым для текущей директории): ");
+        String path = scanner.nextLine();
+        return path.isEmpty() ? System.getProperty("user.dir") : path;
+    }
+    
+    public String getExportFilename() {
+        System.out.print("Введите имя файла (оставьте пустым для автоматического имени): ");
+        return scanner.nextLine();
+    }
+    
+    public void close() {
+        scanner.close();
+    }
+}
+
+class VotingSystemController {
+    private VotingSystemModel model;
+    private VotingSystemView view;
+    
+    public VotingSystemController(VotingSystemModel model, VotingSystemView view) {
+        this.model = model;
+        this.view = view;
+    }
+    
+    public void run() {
+        model.initialize();
+        view.showWelcome();
+        
+        while (true) {
+            String[] credentials = view.getLoginCredentials();
+            if (model.login(credentials[0], credentials[1])) {
+                User user = model.getCurrentUser();
+                view.showMessage("Добро пожаловать, " + user.getFullName() + "!");
+                
+                switch (user.getRole()) {
+                    case "ADMIN":
+                        adminMenu();
+                        break;
+                    case "CIK":
+                        cikMenu();
+                        break;
+                    case "CANDIDATE":
+                        candidateMenu();
+                        break;
+                    case "USER":
+                        userMenu();
+                        break;
+                }
+            } else {
+                if (view.askYesNo("Неверный логин или пароль. Хотите зарегистрироваться?")) {
+                    registerUser();
+                }
+            }
+            
+            if (!view.askYesNo("Хотите продолжить работу с системой?")) {
+                break;
+            }
+        }
+        
+        view.close();
+    }
+    
+    private void registerUser() {
+        view.showRegistrationForm();
+        String username = view.getInput("Логин");
+        String password = view.getInput("Пароль");
+        String fullName = view.getInput("ФИО");
+        String birthDate = view.getInput("Дата рождения (дд.мм.гггг)");
+        String snils = view.getInput("СНИЛС");
+        
+        if (model.registerUser(username, password, fullName, birthDate, snils)) {
+            view.showMessage("Регистрация успешна! Теперь вы можете войти в систему.");
+        } else {
+            view.showError("Пользователь с таким логином уже существует.");
+        }
+    }
+    
+    private void adminMenu() {
+        while (true) {
+            view.showAdminMenu();
+            String choice = view.getInput("Выберите действие");
+            
+            switch (choice) {
+                case "1":
+                    view.showUserList(model.getAllUsers());
+                    break;
+                case "2":
+                    String username = view.getInput("Введите логин пользователя для удаления");
+                    if (model.deleteUser(username)) {
+                        view.showMessage("Пользователь удален");
+                    } else {
+                        view.showError("Не удалось удалить пользователя");
+                    }
+                    break;
+                case "3":
+                    view.showUserList(model.getCikUsers());
+                    break;
+                case "4":
+                    username = view.getInput("Введите логин ЦИК для удаления");
+                    if (model.deleteCikUser(username)) {
+                        view.showMessage("ЦИК удален");
+                    } else {
+                        view.showError("Не удалось удалить ЦИК");
+                    }
+                    break;
+                case "5":
+                    username = view.getInput("Введите логин нового ЦИК");
+                    password = view.getInput("Введите пароль нового ЦИК");
+                    if (model.createCikUser(username, password)) {
+                        view.showMessage("ЦИК создан");
+                    } else {
+                        view.showError("Не удалось создать ЦИК");
+                    }
+                    break;
+                case "6":
+                    view.showCandidateList(model.getAllCandidates());
+                    break;
+                case "7":
+                    String candidateId = view.getInput("Введите ID кандидата для удаления");
+                    if (model.deleteCandidate(candidateId)) {
+                        view.showMessage("Кандидат удален");
+                    } else {
+                        view.showError("Не удалось удалить кандидата");
+                    }
+                    break;
+                case "0":
+                    model.logout();
+                    return;
+                default:
+                    view.showError("Неверный выбор");
+            }
+        }
+    }
+    
+    private void cikMenu() {
+        while (true) {
+            view.showCikMenu();
+            String choice = view.getInput("Выберите действие");
+            
+            switch (choice) {
+                case "1":
+                    String title = view.getInput("Введите название голосования");
+                    String endDateStr = view.getInput("Введите дату окончания (дд.мм.гггг)");
+                    try {
+                        SimpleDateFormat sdf = new SimpleDateFormat("dd.MM.yyyy");
+                        Date endDate = sdf.parse(endDateStr);
+                        if (model.createVoting(title, endDate)) {
+                            view.showMessage("Голосование создано");
+                        } else {
+                            view.showError("Не удалось создать голосование");
+                        }
+                    } catch (Exception e) {
+                        view.showError("Неверный формат даты");
+                    }
+                    break;
+                case "2":
+                    view.showVotingList(model.getAllVotings());
+                    String votingId = view.getInput("Введите ID голосования");
+                    String name = view.getInput("Введите имя кандидата");
+                    String party = view.getInput("Введите партию кандидата");
+                    String bio = view.getInput("Введите информацию о кандидате");
+                    String candidateUsername = view.getInput("Введите логин кандидата");
+                    String candidatePassword = view.getInput("Введите пароль кандидата");
+                    
+                    if (model.createCandidate(name, party, bio, candidateUsername, candidatePassword)) {
+                        String newCandidateId = model.getAllCandidates().stream()
+                                .filter(c -> c.getUsername().equals(candidateUsername))
+                                .findFirst()
+                                .get()
+                                .getId();
+                        
+                        if (model.addCandidateToVoting(votingId, newCandidateId)) {
+                            view.showMessage("Кандидат добавлен в голосование");
+                        } else {
+                            view.showError("Не удалось добавить кандидата в голосование");
+                        }
+                    } else {
+                        view.showError("Не удалось создать кандидата");
+                    }
+                    break;
+                case "3":
+                    view.showVotingList(model.getAllVotings());
+                    votingId = view.getInput("Введите ID голосования для печати результатов");
+                    try {
+                        byte[] pdfBytes = model.generatePdfResults(votingId);
+                        if (pdfBytes != null) {
+                            String dir = view.getExportDirectory();
+                            String filename = view.getExportFilename();
+                            if (filename == null || filename.isEmpty()) {
+                                filename = "results_" + votingId + ".pdf";
+                            }
+                            
+                            Path path = Paths.get(dir, filename);
+                            Files.write(path, pdfBytes);
+                            view.showMessage("PDF сохранен в: " + path.toString());
+                        } else {
+                            view.showError("Не удалось сгенерировать PDF");
+                        }
+                    } catch (Exception e) {
+                        view.showError("Ошибка при создании PDF: " + e.getMessage());
+                    }
+                    break;
+                case "4":
+                    view.showVotingList(model.getAllVotings());
+                    Set<String> votingIds = new HashSet<>();
+                    while (true) {
+                        votingId = view.getInput("Введите ID голосования для выгрузки (или 'готово' для завершения)");
+                        if (votingId.equalsIgnoreCase("готово")) break;
+                        votingIds.add(votingId);
+                    }
+                    
+                    if (!votingIds.isEmpty()) {
+                        boolean singleFile = view.askYesNo("Выгрузить все в один файл?");
+                        String dir = view.getExportDirectory();
+                        String filename = view.getExportFilename();
+                        
+                        String result = model.exportResults(votingIds, singleFile, dir, filename);
+                        if (result != null) {
+                            view.showMessage("Результаты выгружены в: " + result);
+                        } else {
+                            view.showError("Не удалось выгрузить результаты");
+                        }
+                    }
+                    break;
+                case "0":
+                    model.logout();
+                    return;
+                default:
+                    view.showError("Неверный выбор");
+            }
+        }
+    }
+    
+    private void candidateMenu() {
+        while (true) {
+            view.showCandidateMenu();
+            String choice = view.getInput("Выберите действие");
+            
+            switch (choice) {
+                case "1":
+                    String name = view.getInput("Введите ваше имя");
+                    String party = view.getInput("Введите вашу партию");
+                    String bio = view.getInput("Введите информацию о себе");
+                    
+                    if (model.updateCandidateInfo("current", name, party, bio)) {
+                        view.showMessage("Информация обновлена");
+                    } else {
+                        view.showError("Не удалось обновить информацию");
+                    }
+                    break;
+                case "2":
+                    List<Voting> votings = model.getCandidateVotings();
+                    if (votings.isEmpty()) {
+                        view.showMessage("Вы еще не участвовали в голосованиях");
+                    } else {
+                        view.showVotingList(votings);
+                        String votingId = view.getInput("Введите ID голосования для просмотра результатов");
+                        Voting voting = votings.stream()
+                                .filter(v -> v.getId().equals(votingId))
+                                .findFirst()
+                                .orElse(null);
+                        
+                        if (voting != null) {
+                            view.showVotingResults(voting, model.getAllCandidates().stream()
+                                    .collect(Collectors.toMap(Candidate::getId, c -> c)));
+                        } else {
+                            view.showError("Голосование не найдено");
+                        }
+                    }
+                    break;
+                case "3":
+                    votings = model.getCandidateVotings();
+                    if (votings.isEmpty()) {
+                        view.showMessage("Вы еще не участвовали в голосованиях");
+                    } else {
+                        view.showVotingList(votings);
+                    }
+                    break;
+                case "0":
+                    model.logout();
+                    return;
+                default:
+                    view.showError("Неверный выбор");
+            }
+        }
+    }
+    
+    private void userMenu() {
+        while (true) {
+            view.showUserMenu();
+            String choice = view.getInput("Выберите действие");
+            
+            switch (choice) {
+                case "1":
+                    List<Voting> activeVotings = model.getAllVotings().stream()
+                            .filter(Voting::isActive)
+                            .collect(Collectors.toList());
+                    
+                    if (activeVotings.isEmpty()) {
+                        view.showMessage("Нет активных голосований");
+                    } else {
+                        view.showVotingList(activeVotings);
+                    }
+                    break;
+                case "2":
+                    activeVotings = model.getAllVotings().stream()
+                            .filter(Voting::isActive)
+                            .collect(Collectors.toList());
+                    
+                    if (activeVotings.isEmpty()) {
+                        view.showMessage("Нет активных голосований");
+                    } else {
+                        view.showVotingList(activeVotings);
+                        String votingId = view.getInput("Введите ID голосования");
+                        
+                        List<Candidate> candidates = model.getCandidatesForVoting(votingId);
+                        if (candidates.isEmpty()) {
+                            view.showMessage("В этом голосовании нет кандидатов");
+                        } else {
+                            view.showCandidateList(candidates);
+                            String candidateId = view.getInput("Введите ID кандидата для голосования");
+                            
+                            if (model.vote(votingId, candidateId)) {
+                                view.showMessage("Ваш голос принят!");
+                            } else {
+                                view.showError("Не удалось проголосовать. Возможно, вы уже голосовали в этом голосовании.");
+                            }
+                        }
+                    }
+                    break;
+                case "3":
+                    view.showVotingList(model.getAllVotings());
+                    votingId = view.getInput("Введите ID голосования для просмотра кандидатов");
+                    candidates = model.getCandidatesForVoting(votingId);
+                    if (candidates.isEmpty()) {
+                        view.showMessage("В этом голосовании нет кандидатов");
+                    } else {
+                        view.showCandidateList(candidates);
+                    }
+                    break;
+                case "4":
+                    User user = model.getCurrentUser();
+                    List<Voting> allVotings = model.getAllVotings();
+                    
+                    System.out.println("\nГолосования, в которых вы голосовали:");
+                    allVotings.stream()
+                            .filter(v -> user.getVotedIn().contains(v.getId()))
+                            .forEach(v -> System.out.println(v.getTitle() + " (ID: " + v.getId() + ")"));
+                    
+                    System.out.println("\nГолосования, в которых вы не голосовали:");
+                    allVotings.stream()
+                            .filter(v -> !user.getVotedIn().contains(v.getId()))
+                            .forEach(v -> System.out.println(v.getTitle() + " (ID: " + v.getId() + ")"));
+                    break;
+                case "0":
+                    model.logout();
+                    return;
+                default:
+                    view.showError("Неверный выбор");
+            }
+        }
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        VotingSystemModel model = new VotingSystemModel();
+        VotingSystemView view = new VotingSystemView();
+        VotingSystemController controller = new VotingSystemController(model, view);
+        
+        controller.run();
+    }
+}

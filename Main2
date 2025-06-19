@@ -1,0 +1,158 @@
+import java.util.Scanner;
+import java.util.Stack;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
+
+public class AdvancedMathCalculator {
+
+    public static void main(String[] args) {
+        AdvancedCalculatorController controller = new AdvancedCalculatorController();
+        controller.run();
+    }
+}
+
+class AdvancedCalculatorModel {
+    private static final Pattern VALID_EXPRESSION_PATTERN = 
+        Pattern.compile("^[-+]?\\d+([+\\-*/^()\\s.**logexp!]*\\d+)*$");
+    private static final Pattern OPERATORS_PATTERN = 
+        Pattern.compile("[+\\-*/^//]|log\\(|exp\\(|!|\\*\\*");
+    
+    public double calculate(String expression) throws IllegalArgumentException {
+        if (!validateExpression(expression)) {
+            throw new IllegalArgumentException("Некорректное математическое выражение");
+        }
+        
+        if (!checkParentheses(expression)) {
+            throw new IllegalArgumentException("Несбалансированные скобки в выражении");
+        }
+        
+        String processedExpr = preprocessExpression(expression);
+        
+        try {
+            ScriptEngineManager manager = new ScriptEngineManager();
+            ScriptEngine engine = manager.getEngineByName("js");
+            
+            engine.eval("function log(x) { return Math.log(x) / Math.log(2); }");
+            engine.eval("function fact(n) { " +
+                       "if (n <= 1) return 1; " +
+                       "return n * fact(n - 1); }");
+            
+            Object result = engine.eval(processedExpr);
+            
+            if (result instanceof Integer) {
+                return ((Integer) result).doubleValue();
+            } else if (result instanceof Double) {
+                return (Double) result;
+            } else {
+                throw new IllegalArgumentException("Невозможно вычислить выражение");
+            }
+        } catch (ScriptException e) {
+            throw new IllegalArgumentException("Ошибка вычисления: " + e.getMessage());
+        }
+    }
+    
+    private String preprocessExpression(String expression) {
+        return expression.replaceAll("\\^", "**")
+                        .replaceAll("//", "/")
+                        .replaceAll("exp\\(", "Math.exp(")
+                        .replaceAll("!", "fact(");
+    }
+    
+    private boolean validateExpression(String expression) {
+        if (!VALID_EXPRESSION_PATTERN.matcher(expression).matches()) {
+            return false;
+        }
+        
+        Matcher operatorMatcher = OPERATORS_PATTERN.matcher(expression);
+        int operatorCount = 0;
+        while (operatorMatcher.find()) {
+            operatorCount++;
+            if (operatorCount >= 15) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    private boolean checkParentheses(String expression) {
+        Stack<Character> stack = new Stack<>();
+        
+        for (int i = 0; i < expression.length(); i++) {
+            char c = expression.charAt(i);
+            
+            if (c == '(') {
+                stack.push(c);
+            } else if (c == ')') {
+                if (stack.isEmpty()) {
+                    return false;
+                }
+                stack.pop();
+            }
+        }
+        
+        return stack.isEmpty();
+    }
+}
+
+class AdvancedCalculatorView {
+    private Scanner scanner;
+    
+    public AdvancedCalculatorView() {
+        scanner = new Scanner(System.in);
+    }
+    
+    public String getInput() {
+        System.out.println("Введите математическое выражение (или 'exit' для выхода):");
+        return scanner.nextLine().trim();
+    }
+    
+    public void showResult(double result) {
+        System.out.printf("Результат: %.6f%n%n", result);
+    }
+    
+    public void showError(String message) {
+        System.out.printf("Ошибка: %s%n%n", message);
+    }
+    
+    public void close() {
+        scanner.close();
+    }
+}
+
+class AdvancedCalculatorController {
+    private AdvancedCalculatorModel model;
+    private AdvancedCalculatorView view;
+    
+    public AdvancedCalculatorController() {
+        model = new AdvancedCalculatorModel();
+        view = new AdvancedCalculatorView();
+    }
+    
+    public void run() {
+        System.out.println("Усовершенствованный математический калькулятор");
+        System.out.println("Поддерживаемые операции: +, -, *, /, ** или ^ (степень), // (целочисленное деление)");
+        System.out.println("Функции: exp() (экспонента), log() (логарифм по основанию 2), ! (факториал)");
+        System.out.println("Ограничение: максимум 15 слагаемых в выражении");
+        
+        while (true) {
+            String expression = view.getInput();
+            
+            if (expression.equalsIgnoreCase("exit")) {
+                break;
+            }
+            
+            try {
+                double result = model.calculate(expression);
+                view.showResult(result);
+            } catch (IllegalArgumentException e) {
+                view.showError(e.getMessage());
+            }
+        }
+        
+        view.close();
+    }
+}
